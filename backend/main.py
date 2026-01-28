@@ -22,7 +22,7 @@ from schemas import (
 from security import get_password_hash, verify_password, create_access_token, SECRET_KEY, ALGORITHM
 
 
-# ============ ИНИЦИАЛИЗАЦИЯ ============
+#ИНИЦИАЛИЗАЦИЯ
 
 os.makedirs("uploads", exist_ok=True)
 
@@ -51,7 +51,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 GAME_TYPES = ["dice", "wheel", "rps", "random", "who_am_i", "alias", "codenames"]
 
-# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
+#ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 
 async def get_current_user(token: str = Query(...)) -> dict:
     """Получить текущего пользователя из токена"""
@@ -84,8 +84,6 @@ def format_time(dt: datetime) -> str:
         return dt.strftime("%d.%m.%Y")
 
 
-# ============ WEBSOCKET MANAGER ============
-
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict[str, list[WebSocket]] = {}
@@ -117,11 +115,9 @@ class ConnectionManager:
         if user_id in self.user_connections:
             self.user_connections[user_id].discard(room_id)
             
-            # Если больше нет подключений — оффлайн
             if not self.user_connections[user_id]:
                 del self.user_connections[user_id]
                 self.online_users.discard(user_id)
-                # Запускаем асинхронно обновление статуса
                 import asyncio
                 asyncio.create_task(self._update_user_online_status(user_id, False))
 
@@ -166,7 +162,6 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# ============ АУТЕНТИФИКАЦИЯ ============
 
 @app.post("/register", response_model=UserResponse)
 async def register_user(user_data: UserCreate):
@@ -187,7 +182,6 @@ async def register_user(user_data: UserCreate):
                 raise HTTPException(status_code=400, detail="Никнейм уже занят")
             raise HTTPException(status_code=400, detail="Email уже используется")
         
-        # Создаём пользователя
         hashed_pwd = get_password_hash(user_data.password)
         new_user = User(
             username=user_data.username,
@@ -212,7 +206,6 @@ async def login(login_data: UserLogin):
         if not user or not verify_password(login_data.password, user.hashed_password):
             raise HTTPException(status_code=401, detail="Неверная почта или пароль")
         
-        # Обновляем статус онлайн
         user.is_online = True
         user.last_seen = datetime.utcnow()
         await session.commit()
@@ -225,7 +218,6 @@ async def login(login_data: UserLogin):
         return {"access_token": access_token, "token_type": "bearer"}
 
 
-# ============ ПРОФИЛЬ ============
 
 @app.get("/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -276,7 +268,6 @@ async def update_profile(
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         
         if data.username:
-            # Проверяем уникальность
             check = select(User).where(
                 and_(User.username == data.username, User.id != user.id)
             )
@@ -324,7 +315,6 @@ async def mark_messages_read(
     my_id = current_user["id"]
     
     async with async_session_factory() as session:
-        # Проверяем доступ к чату
         chat_query = select(DirectChat).where(
             and_(
                 DirectChat.id == chat_id,
@@ -340,7 +330,6 @@ async def mark_messages_read(
         if not chat:
             raise HTTPException(status_code=404, detail="Чат не найден")
         
-        # Отмечаем все непрочитанные сообщения от собеседника
         await session.execute(
             Message.__table__.update()
             .where(
@@ -354,7 +343,6 @@ async def mark_messages_read(
         )
         await session.commit()
         
-        # Уведомляем через WebSocket что сообщения прочитаны
         room_id = f"dm_{chat_id}"
         read_notification = json.dumps({
             "type": "messages_read",
@@ -366,7 +354,6 @@ async def mark_messages_read(
         return {"status": "ok"}
     
 
-# ============ ПОИСК ПОЛЬЗОВАТЕЛЕЙ ============
 
 @app.get("/users/search")
 async def search_users(
@@ -378,7 +365,7 @@ async def search_users(
         query = select(User).where(
             and_(
                 User.username.ilike(f"%{q}%"),
-                User.id != current_user["id"]  # Не показываем себя
+                User.id != current_user["id"]
             )
         ).limit(20)
         
@@ -395,8 +382,6 @@ async def search_users(
             for u in users
         ]
 
-
-# ============ ЧАТЫ ============
 
 @app.get("/me/directs")
 async def get_my_direct_chats(current_user: dict = Depends(get_current_user)):
@@ -415,22 +400,18 @@ async def get_my_direct_chats(current_user: dict = Depends(get_current_user)):
         
         response = []
         for chat in chats:
-            # Определяем собеседника
             friend_id = chat.user2_id if chat.user1_id == my_id else chat.user1_id
             
-            # Получаем данные собеседника
             friend_query = select(User).where(User.id == friend_id)
             friend_result = await session.execute(friend_query)
             friend = friend_result.scalar_one()
             
-            # Получаем последнее сообщение
             last_msg_query = select(Message).where(
                 Message.chat_id == chat.id
             ).order_by(Message.created_at.desc()).limit(1)
             last_msg_result = await session.execute(last_msg_query)
             last_msg = last_msg_result.scalar_one_or_none()
             
-            # Считаем непрочитанные
             unread_query = select(func.count(Message.id)).where(
                 and_(
                     Message.chat_id == chat.id,
@@ -452,7 +433,6 @@ async def get_my_direct_chats(current_user: dict = Depends(get_current_user)):
                 "unread_count": unread_count
             })
         
-        # Сортируем по времени последнего сообщения
         response.sort(
             key=lambda x: x["time"] if x["time"] else "",
             reverse=True
@@ -473,7 +453,6 @@ async def start_direct_chat(
         raise HTTPException(status_code=400, detail="Нельзя создать чат с собой")
     
     async with async_session_factory() as session:
-        # Проверяем существование пользователя
         target_query = select(User).where(User.id == target_user_id)
         target_result = await session.execute(target_query)
         target_user = target_result.scalar_one_or_none()
@@ -481,7 +460,6 @@ async def start_direct_chat(
         if not target_user:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         
-        # Проверяем существующий чат
         chat_query = select(DirectChat).where(
             or_(
                 and_(DirectChat.user1_id == my_id, DirectChat.user2_id == target_user_id),
@@ -499,7 +477,6 @@ async def start_direct_chat(
                 "avatar_url": target_user.avatar_url
             }
         
-        # Создаём новый чат
         new_chat = DirectChat(user1_id=my_id, user2_id=target_user_id)
         session.add(new_chat)
         await session.commit()
@@ -524,7 +501,6 @@ async def get_chat_messages(
     my_id = current_user["id"]
     
     async with async_session_factory() as session:
-        # Проверяем доступ к чату
         chat_query = select(DirectChat).where(
             and_(
                 DirectChat.id == chat_id,
@@ -540,7 +516,6 @@ async def get_chat_messages(
         if not chat:
             raise HTTPException(status_code=404, detail="Чат не найден")
         
-        # Получаем сообщения
         messages_query = (
             select(Message, User)
             .join(User, Message.sender_id == User.id)
@@ -594,7 +569,6 @@ async def create_game(
         await session.commit()
         await session.refresh(new_game)
         
-        # Добавляем создателя как игрока
         player = GamePlayer(
             session_id=new_game.id,
             user_id=current_user["id"]
@@ -617,7 +591,6 @@ async def join_game(
 ):
     """Присоединиться к игре"""
     async with async_session_factory() as session:
-        # Получаем игру
         query = select(GameSession).where(GameSession.id == session_id)
         result = await session.execute(query)
         game = result.scalar_one_or_none()
@@ -628,7 +601,6 @@ async def join_game(
         if game.status != "waiting":
             raise HTTPException(status_code=400, detail="Игра уже началась или завершена")
         
-        # Проверяем, не в игре ли уже
         check_query = select(GamePlayer).where(
             and_(
                 GamePlayer.session_id == session_id,
@@ -638,7 +610,6 @@ async def join_game(
         if (await session.execute(check_query)).scalar_one_or_none():
             raise HTTPException(status_code=400, detail="Вы уже в игре")
         
-        # Добавляем игрока
         player = GamePlayer(
             session_id=session_id,
             user_id=current_user["id"]
@@ -691,13 +662,11 @@ async def game_action(
         if game.status != "active":
             raise HTTPException(status_code=400, detail="Игра не активна")
         
-        # Логика для разных игр
         response = {}
         
         if game.game_type == "dice" and action == "roll":
             roll_result = random.randint(1, 6)
             
-            # Обновляем счёт игрока
             player_query = select(GamePlayer).where(
                 and_(
                     GamePlayer.session_id == session_id,
@@ -728,7 +697,7 @@ async def game_action(
             }
         
         elif game.game_type == "rps" and action == "choose":
-            choice = data.get("choice")  # rock, paper, scissors
+            choice = data.get("choice")
             if choice not in ["rock", "paper", "scissors"]:
                 raise HTTPException(status_code=400, detail="Неверный выбор")
             
@@ -739,7 +708,6 @@ async def game_action(
             }
         
         elif game.game_type == "random" and action == "pick":
-            # Получаем всех игроков
             players_query = select(GamePlayer, User).join(User).where(
                 GamePlayer.session_id == session_id
             )
@@ -773,14 +741,12 @@ async def end_game(
         
         game.status = "finished"
         game.finished_at = datetime.utcnow()
-        
-        # Обновляем статистику
+
         players_query = select(GamePlayer).where(GamePlayer.session_id == session_id)
         players_result = await session.execute(players_query)
         players = players_result.scalars().all()
         
         for player in players:
-            # Получаем или создаём статистику
             stats_query = select(GameStats).where(
                 and_(
                     GameStats.user_id == player.user_id,
@@ -855,22 +821,18 @@ async def get_user_game_stats(
             for s in stats
         ]
 
-# ============ ЗАГРУЗКА ФАЙЛОВ ============
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """Загрузить файл (изображение)"""
-    # Проверяем тип файла
     allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
     if file.content_type not in allowed_types:
         raise HTTPException(status_code=400, detail="Разрешены только изображения")
-    
-    # Проверяем размер (10MB max)
+        
     contents = await file.read()
     if len(contents) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Файл слишком большой (макс. 10MB)")
     
-    # Сохраняем
     file_extension = file.filename.split(".")[-1] if "." in file.filename else "jpg"
     unique_filename = f"{uuid.uuid4()}.{file_extension}"
     file_path = f"uploads/{unique_filename}"
@@ -881,8 +843,6 @@ async def upload_file(file: UploadFile = File(...)):
     return {"url": f"/uploads/{unique_filename}"}
 
 
-# ============ WEBSOCKET ============
-
 @app.websocket("/ws/dm/{chat_id}")
 async def websocket_dm(
     websocket: WebSocket,
@@ -891,7 +851,6 @@ async def websocket_dm(
 ):
     """WebSocket для личных сообщений"""
     
-    # Проверяем токен
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = int(payload.get("sub"))
@@ -900,7 +859,6 @@ async def websocket_dm(
         await websocket.close(code=4001)
         return
     
-    # Проверяем доступ к чату
     async with async_session_factory() as session:
         chat_query = select(DirectChat).where(
             and_(
@@ -922,7 +880,6 @@ async def websocket_dm(
     await manager.connect(websocket, room_id, user_id)
     
     try:
-        # Отправляем историю БЕЗ автоматического прочтения
         async with async_session_factory() as session:
             query = (
                 select(Message, User)
@@ -944,22 +901,18 @@ async def websocket_dm(
                     "time": msg.created_at.strftime("%H:%M"),
                     "chat_id": chat_id,
                     "sender_id": msg.sender_id,
-                    "is_read": msg.is_read  # Добавляем статус прочтения
+                    "is_read": msg.is_read
                 })
                 await websocket.send_text(history_data)
         
-        # НЕ отмечаем сообщения прочитанными автоматически!
-        # Клиент сам вызовет /chats/{id}/read когда пользователь откроет чат
         
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)
             
-            # Проверяем тип сообщения
             msg_type = message_data.get("type", "message")
             
             if msg_type == "read":
-                # Клиент сообщает что прочитал
                 async with async_session_factory() as session:
                     await session.execute(
                         Message.__table__.update()
@@ -974,7 +927,6 @@ async def websocket_dm(
                     )
                     await session.commit()
                 
-                # Уведомляем собеседника
                 read_notification = json.dumps({
                     "type": "messages_read",
                     "chat_id": chat_id,
@@ -983,7 +935,6 @@ async def websocket_dm(
                 await manager.broadcast(read_notification, room_id)
                 continue
             
-            # Обычное сообщение
             text = message_data.get("text", "").strip()
             image_url = message_data.get("image")
             
@@ -1000,7 +951,7 @@ async def websocket_dm(
                     sender_id=user_id,
                     text=text if text else None,
                     image_url=image_url,
-                    is_read=False  # Новое сообщение НЕ прочитано
+                    is_read=False
                 )
                 session.add(new_msg)
                 await session.commit()
