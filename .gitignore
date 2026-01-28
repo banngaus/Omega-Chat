@@ -1,0 +1,19 @@
+# Python garbage
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.DS_Store
+
+# Flutter/Dart garbage
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Database
+*.sqlite3
+*.db
